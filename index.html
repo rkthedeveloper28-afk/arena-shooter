@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arena Shooter 2D</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background: #090d16;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #ui-bar {
+      width: 900px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+    }
+    .field-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #ui-bar input, #ui-bar select {
+      background: #1e293b;
+      color: #38bdf8;
+      border: 1px solid #334155;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
+      outline: none;
+    }
+    #ui-bar input:focus, #ui-bar select:focus {
+      border-color: #38bdf8;
+    }
+    #status-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: #38bdf8;
+    }
+    #game-wrapper {
+      position: relative;
+      width: 900px;
+      height: 600px;
+      border: 2px solid #334155;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+      background: #0b1120;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #kill-feed {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+      z-index: 50;
+    }
+    .kf-item {
+      background: rgba(15, 23, 42, 0.85);
+      border-left: 3px solid #38bdf8;
+      padding: 5px 9px;
+      border-radius: 4px;
+      font-size: 12px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.4);
+    }
+    #hud-overlay {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      display: flex;
+      gap: 12px;
+      pointer-events: none;
+      z-index: 40;
+    }
+    .hud-chip {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid #334155;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: bold;
+      color: #94a3b8;
+    }
+    .hud-chip span {
+      color: #f8fafc;
+    }
+    #victory-modal {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 13, 22, 0.92);
+      z-index: 100;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui-bar">
+    <div class="field-group">
+      <label for="nameInput">Tag:</label>
+      <input type="text" id="nameInput" placeholder="Player..." maxlength="10">
+      <label for="costumeSelect" style="margin-left: 8px;">Skin:</label>
+      <select id="costumeSelect">
+        <option value="spec_ops">🪖 Spec-Ops</option>
+        <option value="cyber_neon">⚡ Cyberpunk</option>
+        <option value="desert_merc">🏜️ Desert Merc</option>
+        <option value="warrior">🛡️ Warrior</option>
+      </select>
+    </div>
+    <div id="status-text">Connecting to server...</div>
+  </div>
+
+  <div id="game-wrapper">
+    <canvas id="c" width="900" height="600"></canvas>
+    
+    <div id="hud-overlay">
+      <div class="hud-chip">WEAPON: <span id="hud-weapon">PISTOL</span></div>
+      <div class="hud-chip">AMMO: <span id="hud-ammo">∞</span></div>
+      <div class="hud-chip">DASH: <span id="hud-dash" style="color: #22c55e;">READY</span></div>
+    </div>
+
+    <div id="kill-feed"></div>
+
+    <div id="victory-modal">
+      <div style="font-size: 3.5rem;">🏆</div>
+      <h1 id="winner-tag" style="color: #38bdf8; margin-top: 10px;">MATCH FINISHED</h1>
+      <p style="color: #94a3b8; margin-top: 8px;">Starting next round in a few seconds...</p>
+    </div>
+  </div>
+
+<script>
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const killFeed = document.getElementById('kill-feed');
+  const victoryModal = document.getElementById('victory-modal');
+  const winnerTag = document.getElementById('winner-tag');
+  const nameInput = document.getElementById('nameInput');
+  const costumeSelect = document.getElementById('costumeSelect');
+  const statusText = document.getElementById('status-text');
+  const hudWeapon = document.getElementById('hud-weapon');
+  const hudAmmo = document.getElementById('hud-ammo');
+  const hudDash = document.getElementById('hud-dash');
+
+  let myId = null;
+  let ws = null;
+
+  // Static layout defaults (renders arena even before socket packets arrive)
+  let walls = [
+    { x: 140, y: 120, w: 30, h: 140 },
+    { x: 730, y: 120, w: 30, h: 140 },
+    { x: 140, y: 340, w: 30, h: 140 },
+    { x: 730, y: 340, w: 30, h: 140 },
+    { x: 380, y: 260, w: 140, h: 40 }
+  ];
+  let players = {};
+  let bullets = [];
+  let powerups = [];
+  let airDrops = [];
+  let storm = { x: 450, y: 300, radius: 550 };
+
+  const keys = { left: false, right: false, up: false, down: false };
+  let mouse = { x: 450, y: 300 };
+  let lastDashLocal = 0;
+
+  const COSTUMES = {
+    spec_ops:   { body: '#1e293b', armor: '#334155', visor: '#22c55e' },
+    cyber_neon: { body: '#3b0764', armor: '#7c3aed', visor: '#06b6d4' },
+    desert_merc:{ body: '#451a03', armor: '#92400e', visor: '#facc15' },
+    warrior:    { body: '#4c0519', armor: '#9f1239', visor: '#38bdf8' }
+  };
+
+  // --- SAFE WEBSOCKET SETUP ---
+  function connectSocket() {
+    let wsHost = window.location.host;
+    if (!wsHost || wsHost === '') {
+      wsHost = 'localhost:3000';
+    }
+    const wsProto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const socketUrl = `${wsProto}${wsHost}`;
+
+    statusText.textContent = `Connecting to ${wsHost}...`;
+    statusText.style.color = '#38bdf8';
+
+    try {
+      ws = new WebSocket(socketUrl);
+
+      ws.onopen = () => {
+        statusText.textContent = '● Connected | WASD + Mouse | Space: Dash';
+        statusText.style.color = '#22c55e';
+        if (nameInput.value) {
+          ws.send(JSON.stringify({ type: 'setName', name: nameInput.value }));
+        }
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+
+          if (data.type === 'init') {
+            myId = data.id;
+            if (data.map && data.map.walls) walls = data.map.walls;
+            if (data.storm) storm = data.storm;
+          } else if (data.type === 'state') {
+            players = data.players || {};
+            bullets = data.bullets || [];
+            powerups = data.powerups || [];
+            airDrops = data.airDrops || [];
+            if (data.storm) storm = data.storm;
+
+            if (myId && players[myId]) {
+              hudWeapon.textContent = (players[myId].weapon || 'PISTOL').toUpperCase();
+              hudAmmo.textContent = players[myId].ammo === Infinity ? '∞' : players[myId].ammo;
+            }
+          } else if (data.type === 'kill_feed') {
+            const item = document.createElement('div');
+            item.className = 'kf-item';
+            item.innerHTML = `<b style="color:${data.killerColor}">${data.killer}</b> eliminated <b style="color:${data.victimColor}">${data.victim}</b>`;
+            killFeed.appendChild(item);
+            setTimeout(() => item.remove(), 4000);
+          } else if (data.type === 'game_over') {
+            winnerTag.textContent = `${data.winner} WON THE MATCH!`;
+            victoryModal.style.display = 'flex';
+          } else if (data.type === 'match_restart') {
+            victoryModal.style.display = 'none';
+          }
+        } catch (err) {
+          console.error("Packet parse error:", err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        statusText.textContent = '⚠️ WebSocket Connection Error';
+        statusText.style.color = '#ef4444';
+      };
+
+      ws.onclose = () => {
+        statusText.textContent = '❌ Disconnected from Server (Retrying...)';
+        statusText.style.color = '#ef4444';
+        setTimeout(connectSocket, 2500);
+      };
+    } catch (err) {
+      statusText.textContent = '❌ Connection failed';
+      statusText.style.color = '#ef4444';
+      setTimeout(connectSocket, 3000);
+    }
+  }
+
+  connectSocket();
+
+  // --- INPUT BINDINGS ---
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyA') keys.left = true;
+    if (e.code === 'KeyD') keys.right = true;
+    if (e.code === 'KeyW') keys.up = true;
+    if (e.code === 'KeyS') keys.down = true;
+
+    if (e.code === 'Space' && !e.repeat) {
+      const now = Date.now();
+      if (now - lastDashLocal >= 1400) {
+        lastDashLocal = now;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'dash', keys }));
+        }
+      }
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'KeyA') keys.left = false;
+    if (e.code === 'KeyD') keys.right = false;
+    if (e.code === 'KeyW') keys.up = false;
+    if (e.code === 'KeyS') keys.down = false;
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left;
+    mouse.y = e.clientY - rect.top;
+  });
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0 && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'shoot' }));
+    }
+  });
+
+  nameInput.addEventListener('change', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'setName', name: nameInput.value }));
+    }
+  });
+
+  costumeSelect.addEventListener('change', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'select_costume', costumeId: costumeSelect.value }));
+    }
+  });
+
+  // 60Hz Input Send
+  setInterval(() => {
+    const now = Date.now();
+    if (now - lastDashLocal >= 1400) {
+      hudDash.textContent = 'READY';
+      hudDash.style.color = '#22c55e';
+    } else {
+      hudDash.textContent = `${((1400 - (now - lastDashLocal)) / 1000).toFixed(1)}s`;
+      hudDash.style.color = '#f59e0b';
+    }
+
+    if (myId && players[myId] && ws && ws.readyState === WebSocket.OPEN) {
+      const me = players[myId];
+      const angle = Math.atan2(mouse.y - me.y, mouse.x - me.x);
+      ws.send(JSON.stringify({ type: 'input', keys, angle }));
+    }
+  }, 1000 / 60);
+
+  // --- RENDER LOOP ---
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Grid Floor
+    ctx.fillStyle = '#0b1120';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1;
+    const gridSize = 45;
+    for (let x = 0; x <= canvas.width; x += gridSize) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+    }
+    for (let y = 0; y <= canvas.height; y += gridSize) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+    }
+
+    // 2. Obstacle Bunkers
+    ctx.fillStyle = '#1e293b';
+    walls.forEach(w => {
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(w.x, w.y, w.w, w.h);
+    });
+
+    // 3. Powerups / Crates
+    powerups.forEach(pup => {
+      ctx.fillStyle = pup.type === 'shield' ? '#38bdf8' : '#fb923c';
+      ctx.beginPath();
+      ctx.arc(pup.x, pup.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 4. Parachute Air-Drops
+    airDrops.forEach(d => {
+      ctx.save();
+      if (!d.landed) {
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(d.x, d.y, 14, 0, Math.PI * 2); ctx.stroke();
+      } else {
+        ctx.fillStyle = '#ca8a04';
+        ctx.fillRect(d.x - 12, d.y - 12, 24, 24);
+        ctx.strokeStyle = '#fef08a';
+        ctx.strokeRect(d.x - 12, d.y - 12, 24, 24);
+      }
+      ctx.restore();
+    });
+
+    // 5. Players
+    for (const id in players) {
+      const p = players[id];
+      if (!p || typeof p.x !== 'number') continue;
+
+      const skin = COSTUMES[p.costume] || COSTUMES.spec_ops;
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+
+      // Name label
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(p.name || 'Player', 0, -26);
+
+      // Health bar
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(-14, -20, 28, 4);
+      ctx.fillStyle = '#22c55e';
+      ctx.fillRect(-14, -20, Math.max(0, (p.hp / 100) * 28), 4);
+
+      // Shield bar
+      if (p.shield > 0) {
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillRect(-14, -25, Math.max(0, (p.shield / 50) * 28), 3);
+      }
+
+      // Rotate player torso & gun
+      ctx.rotate(p.angle || 0);
+
+      // Dash trail aura
+      if (p.isDashing) {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.4)';
+        ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // Torso
+      ctx.fillStyle = skin.body;
+      ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill();
+
+      // Armor vest
+      ctx.fillStyle = skin.armor;
+      ctx.beginPath(); ctx.arc(-2, 0, 9, -Math.PI / 2, Math.PI / 2); ctx.fill();
+
+      // Gun barrel
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, -3, 22, 6);
+
+      // Visor
+      ctx.strokeStyle = skin.visor;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(4, 0, 6, -Math.PI / 3, Math.PI / 3); ctx.stroke();
+
+      ctx.restore();
+    }
+
+    // 6. Projectiles
+    bullets.forEach(b => {
+      ctx.fillStyle = b.color || '#facc15';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 7. Toxic Storm Ring
+    if (storm && typeof storm.radius === 'number' && storm.radius > 0) {
+      ctx.save();
+      ctx.strokeStyle = '#c084fc';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      ctx.arc(storm.x, storm.y, Math.max(1, storm.radius), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Mist boundary outside safe perimeter
+      ctx.beginPath();
+      ctx.rect(0, 0, canvas.width, canvas.height);
+      ctx.arc(storm.x, storm.y, Math.max(1, storm.radius), 0, Math.PI * 2, true);
+      ctx.fillStyle = 'rgba(88, 28, 135, 0.45)';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  // Launch render loop
+  requestAnimationFrame(draw);
+</script>
+</body>
+</html>
